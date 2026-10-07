@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BDAT</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; color: #eef2ff; background: radial-gradient(ellipse at top, #20304b 0%, #111827 52%, #0b1019 100%); }
+      main { width: min(560px, calc(100vw - 40px)); padding: 48px; border: 1px solid #344256; border-radius: 24px; background: #111a28e8; box-shadow: 0 24px 90px #0008; }
+      .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 34px; }
+      .mark { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 14px; color: #dbeafe; background: linear-gradient(145deg,#3974d5,#1c3c73); font-size: 22px; font-weight: 800; }
+      .name { font-size: 17px; font-weight: 750; letter-spacing: .12em; }
+      .tag { margin-top: 3px; color: #92a3bb; font-size: 12px; }
+      h1 { margin: 0 0 12px; font-size: 25px; letter-spacing: -.03em; }
+      p { min-height: 44px; margin: 0; color: #aab7ca; line-height: 1.6; font-size: 14px; }
+      .progress { height: 5px; margin: 28px 0 15px; overflow: hidden; border-radius: 8px; background: #283548; }
+      .bar { width: 35%; height: 100%; border-radius: inherit; background: #69a3ff; animation: progress 1.7s ease-in-out infinite; }
+      @keyframes progress { 0% { transform: translateX(-120%); } 100% { transform: translateX(330%); } }
+      .detail { min-height: 18px; color: #73849d; font-size: 12px; overflow-wrap: anywhere; }
+      .actions { display: none; gap: 10px; margin-top: 24px; }
+      button { padding: 11px 15px; border: 0; border-radius: 10px; color: white; background: #3678e5; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+      button.secondary { border: 1px solid #42516a; background: #1c293b; }
+      .error h1 { color: #ffcfbd; }
+      .error .actions { display: flex; }
+      .error .bar { animation: none; width: 100%; background: #d77b68; }
+      .ready .progress { display: none; }
+      @media (max-width: 520px) { main { padding: 30px 24px; } }
+    </style>
+  </head>
+  <body>
+    <main id="panel">
+      <div class="brand"><div class="mark">B</div><div><div class="name">BDAT</div><div class="tag">Bone Guided Wave Analysis Tool</div></div></div>
+      <h1 id="message">Iniciando BDAT</h1>
+      <p id="description">Comprobando el entorno de simulación.</p>
+      <div class="progress"><div class="bar"></div></div>
+      <div class="detail" id="detail"></div>
+      <div class="actions">
+        <button id="retry">Volver a intentar</button>
+        <button class="secondary" id="install">Instalar Docker Desktop</button>
+      </div>
+    </main>
+    <script>
+      const panel = document.getElementById('panel');
+      const message = document.getElementById('message');
+      const description = document.getElementById('description');
+      const detail = document.getElementById('detail');
+      window.bdatDesktop.onStartupStatus((status) => {
+        message.textContent = status.message;
+        description.textContent = status.state === 'error'
+          ? 'Para ejecutar las simulaciones, BDAT necesita Docker Desktop con WSL 2 habilitado.'
+          : status.detail || '';
+        detail.textContent = status.state === 'error' ? status.detail : '';
+        panel.classList.toggle('error', status.state === 'error');
+        panel.classList.toggle('ready', status.state === 'ready');
+      });
+      document.getElementById('retry').addEventListener('click', () => {
+        panel.classList.remove('error');
+        message.textContent = 'Reintentando…';
+        description.textContent = 'Comprobando los servicios de BDAT.';
+        detail.textContent = '';
+        window.bdatDesktop.retryStartup().catch(() => {});
+      });
+      document.getElementById('install').addEventListener('click', () => window.bdatDesktop.openDockerDownload());
+    </script>
+  </body>
+</html>

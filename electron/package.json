@@ -1,0 +1,75 @@
+{
+  "name": "bdat-desktop",
+  "version": "1.0.0",
+  "description": "Aplicación de escritorio para BDAT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "cl.bdat.desktop",
+    "productName": "BDAT",
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "startup.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/build",
+        "to": "app-ui"
+      },
+      {
+        "from": "../backend",
+        "to": "desktop-runtime/backend",
+        "filter": [
+          "Dockerfile",
+          "requirements.txt",
+          "src/**",
+          "!src/**/__pycache__/**",
+          "!src/features/simulations/meshes/**"
+        ]
+      },
+      {
+        "from": "../database",
+        "to": "desktop-runtime/database",
+        "filter": [
+          "Dockerfile",
+          "init.sql",
+          "my.cnf"
+        ]
+      },
+      {
+        "from": "docker-compose.desktop.yml",
+        "to": "desktop-runtime/docker-compose.yml"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "BDAT-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BDAT"
+    }
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

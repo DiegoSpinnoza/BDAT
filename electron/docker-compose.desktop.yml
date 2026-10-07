@@ -1,0 +1,92 @@
+services:
+  mysql:
+    build:
+      context: ${BDAT_RUNTIME_DIR}/database
+      dockerfile: Dockerfile
+    image: bdat-desktop-mysql:1.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: BDATpassword
+      MYSQL_DATABASE: BDAT_FE_simulations
+      MYSQL_USER: UserBDAT
+      MYSQL_PASSWORD: BDATpassword
+    volumes:
+      - bdat-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uUserBDAT", "-pBDATpassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - bdat-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ${BDAT_RUNTIME_DIR}/backend
+      dockerfile: Dockerfile
+    image: bdat-desktop-backend:1.0
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BDAT_API_PORT:-5000}:5000"
+    environment:
+      DOCKER_ENV: "true"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: UserBDAT
+      MYSQL_PASSWORD: BDATpassword
+      MYSQL_DB: BDAT_FE_simulations
+      FLASK_ENV: production
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PYTHONPATH: /app/src
+      PYTHONUNBUFFERED: "1"
+      EVENTLET_NO_GREENDNS: "yes"
+    volumes:
+      - bdat-simulation-results:/app/simulation_results
+      - bdat-meshes:/app/src/features/simulations/meshes
+    restart: unless-stopped
+
+  celery_worker:
+    image: bdat-desktop-backend:1.0
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python3", "-m", "celery", "-A", "celery_worker.celery", "worker", "--loglevel=info", "--concurrency=1", "--pool=solo"]
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: UserBDAT
+      MYSQL_PASSWORD: BDATpassword
+      MYSQL_DB: BDAT_FE_simulations
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PYTHONPATH: /app/src
+      PYTHONUNBUFFERED: "1"
+      EVENTLET_NO_GREENDNS: "yes"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    volumes:
+      - bdat-simulation-results:/app/simulation_results
+      - bdat-meshes:/app/src/features/simulations/meshes
+    restart: unless-stopped
+
+volumes:
+  bdat-db-data:
+  bdat-redis-data:
+  bdat-simulation-results:
+  bdat-meshes:

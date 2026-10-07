@@ -152,11 +152,12 @@ def update_simulation_result(mysql, sim_id, filename, status, execution_time, fi
         query += ", file_data = %s"
         params.append(file_content)
         
-    query += " WHERE id = %s"
+    query += " WHERE id = %s AND p_status = 'Running'"
     params.append(sim_id)
     
     try:
         cur.execute(query, tuple(params))
+        updated = cur.rowcount == 1
         mysql.connection.commit()
     except Exception as e:
         # Fallback if file_data column doesn't exist
@@ -169,11 +170,13 @@ def update_simulation_result(mysql, sim_id, filename, status, execution_time, fi
              # The file_content was added before sim_id, so it is at index -2
              params.pop(-2) 
              cur.execute(query, tuple(params))
+             updated = cur.rowcount == 1
              mysql.connection.commit()
         else:
             raise e
     finally:
         cur.close()
+    return updated
 
 def get_simulation_count_running(mysql):
     cur = mysql.connection.cursor()

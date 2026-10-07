@@ -11,8 +11,9 @@ import { useLocation } from 'react-router-dom';
 import simulationService from './simulationService';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
+import { API_BASE_URL } from '../../services/apiBaseUrl';
 
-const API = "http://localhost:5000/";
+const API = `${API_BASE_URL}/`;
 const ROW_HEIGHT = 56;
 
 // 🔔 Función para reproducir sonido de notificación
@@ -83,6 +84,7 @@ const Simulations = () => {
     const [isAbortingIndividual, setIsAbortingIndividual] = useState(false);
     const [hasFetchedInitialData, setHasFetchedInitialData] = useState(false);
     const [showPageTransition, setShowPageTransition] = useState(() => Boolean(location.state?.showTransition));
+    const simulationsRequestRef = useRef(null);
 
     // Progress tracking: { [simId]: { percentage, current_step, total_steps, current_source, total_sources } }
     const [simulationProgress, setSimulationProgress] = useState({});
@@ -92,6 +94,7 @@ const Simulations = () => {
 
     const tableContainerRef = useRef(null);
     const batchImportAbortRef = useRef(null);
+    const activeSimulationRunsRef = useRef(new Set());
     const meshWaitersRef = useRef(new Map());
     // True when we detected a stale import session on page load.
     // Note: Since batch imports now run entirely in a Celery worker, 
@@ -139,6 +142,8 @@ const Simulations = () => {
     }, []);
 
     const fetchSimulations = async () => {
+        if (simulationsRequestRef.current) return simulationsRequestRef.current;
+        const request = (async () => {
         try {
             const res = await fetch(`${API}simulations`);
             if (!res.ok) {
@@ -150,8 +155,28 @@ const Simulations = () => {
             toast.error('No se pudieron cargar las simulaciones');
         } finally {
             setHasFetchedInitialData(true);
+            simulationsRequestRef.current = null;
         }
+        })();
+        simulationsRequestRef.current = request;
+        return request;
     };
+
+    const hasActiveSimulationWork = simulations.some(sim =>
+        ['Processing', 'Running', 'Aborting', 'Queued'].includes(sim.p_status)
+    );
+    useEffect(() => {
+        if (!hasActiveSimulationWork) return;
+        const interval = setInterval(() => {
+            fetchSimulations();
+            // This endpoint retries any durable queue item that could not be
+            // published while Redis/Celery was unavailable.
+            simulationService.getQueueStatus().catch(() => {});
+        }, 4000);
+        return () => clearInterval(interval);
+        // Fetch helpers are intentionally stable through refs/state snapshots.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hasActiveSimulationWork]);
 
     useEffect(() => {
         fetchSimulations();
@@ -508,6 +533,8 @@ const Simulations = () => {
             toast.error('No puedes ejecutar simulaciones mientras el batch import está en progreso');
             return;
         }
+        if (activeSimulationRunsRef.current.has(simulationId)) return;
+        activeSimulationRunsRef.current.add(simulationId);
         // Actualización optimista: mostrar 'Processing' mientras se contacta el backend
         setSimulations(prev =>
             prev.map(sim =>
@@ -522,9 +549,14 @@ const Simulations = () => {
 
         try {
             // executeSimulation ahora lanza excepción si el backend responde con error
-            await simulationService.executeSimulation(simulationId, simulationData);
-            // Si llegó aquí: el backend aceptó la solicitud (202). El estado real
-            // llegará vía WebSocket (Running → Finished/Error/Aborted).
+            const accepted = await simulationService.executeSimulation(simulationId, simulationData);
+            const nextStatus = accepted.status || (accepted.queued ? 'Queued' : 'Running');
+            setSimulations(prev => prev.map(sim => sim.id === simulationId ? { ...sim, p_status: nextStatus } : sim));
+            setSelectedSimulation(prev => prev && prev.id === simulationId ? { ...prev, p_status: nextStatus } : prev);
+            if (nextStatus === 'Queued') {
+                toast.success(accepted.queue_position ? `Simulación agregada a la cola (posición ${accepted.queue_position})` : 'Simulación agregada a la cola');
+            }
+            return accepted;
         } catch (error) {
             // Revertir el estado optimista si el backend rechazó la solicitud
             console.error('❌ Error al ejecutar simulación:', error.message);
@@ -539,6 +571,20 @@ const Simulations = () => {
                     ? { ...prev, p_status: simulationData.p_status || 'Not started' }
                     : prev
             );
+            // The request may have timed out after the server accepted it.
+            // Reconcile with the DB before allowing another start attempt.
+            try {
+                const res = await fetch(`${API}simulations`);
+                if (res.ok) {
+                    const latest = await res.json();
+                    setSimulations(latest);
+                    const found = latest.find(sim => sim.id === simulationId);
+                    if (found) setSelectedSimulation(prev => prev?.id === simulationId ? { ...prev, ...found } : prev);
+                }
+            } catch (_) {}
+            return null;
+        } finally {
+            activeSimulationRunsRef.current.delete(simulationId);
         }
     };
 
@@ -922,7 +968,7 @@ const Simulations = () => {
 
     // ── Control Bar: Stop All ─────────────────────────────────────────
     const handleStopAll = async () => {
-        const running = simulations.filter(s => s.p_status === 'Running').length;
+        const running = simulations.filter(s => ['Running', 'Aborting'].includes(s.p_status)).length;
         const queued = simulations.filter(s => s.p_status === 'Queued').length;
 
         if (running === 0 && queued === 0) {
@@ -932,7 +978,7 @@ const Simulations = () => {
 
         const confirmed = await confirm({
             title: 'Stop All Simulations',
-            message: `This will abort ${running} running simulation(s) and dequeue ${queued} queued simulation(s).\n\nAll affected simulations will be marked as Aborted.`,
+            message: `This will request cancellation for ${running} active simulation(s) and remove ${queued} queued simulation(s). Active runs will finish stopping safely.`,
             confirmText: 'Stop All',
             cancelText: 'Cancel',
             type: 'danger',
@@ -943,10 +989,10 @@ const Simulations = () => {
         try {
             const result = await simulationService.abortAllSimulations();
             if (result.success) {
-                const { aborted, dequeued } = result.summary;
-                toast.success(
-                    `All stopped — ${aborted} aborted, ${dequeued} dequeued`
-                );
+                const { aborted, dequeued, cancelling = 0 } = result.summary;
+                toast.success(cancelling
+                    ? `Cancellation requested for ${cancelling} active simulation(s); ${dequeued} removed from queue`
+                    : `All stopped — ${aborted} aborted, ${dequeued} removed from queue`);
             } else {
                 toast.error(result.error || 'Error stopping all simulations');
             }

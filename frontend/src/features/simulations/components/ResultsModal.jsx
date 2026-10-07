@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, FileText } from 'lucide-react';
 import ResultsVisualization from './ResultsVisualization';
+import { API_BASE_URL } from '../../../services/apiBaseUrl';
 
 /**
  * Modal para visualizar resultados de simulación
@@ -20,7 +21,7 @@ const ResultsModal = ({ isOpen, onClose, simulation }) => {
     setLoading(true);
     try {
       // Cargar resultados reales desde el backend
-      const response = await fetch(`http://localhost:5000/simulations/${simulation.id}/results`);
+      const response = await fetch(`${API_BASE_URL}/simulations/${simulation.id}/results`);
       
       if (!response.ok) {
         const errorData = await response.json();

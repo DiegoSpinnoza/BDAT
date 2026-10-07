@@ -132,6 +132,12 @@ def dequeue_sim(id):
     else:
         return jsonify({'error': message, 'simulation_id': id}), 400
 
+@simulations_bp.route('/simulations/queue/status', methods=['GET'])
+def get_queue_status():
+    """Return the DB-backed queue snapshot and retry pending dispatch."""
+    from ..services.simulations_service import get_queue_status_service
+    return get_queue_status_service()
+
 @simulations_bp.route('/simulations/queue/reorder', methods=['PUT'])
 def reorder_queue():
     """Reordenar la cola de simulaciones"""

@@ -12,8 +12,9 @@ import io from 'socket.io-client';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import ResultsModal from './components/ResultsModal';
+import { API_BASE_URL } from '../../services/apiBaseUrl';
 
-const API = 'http://localhost:5000';
+const API = API_BASE_URL;
 
 const SimulationModal = ({
     isOpen,
@@ -606,9 +607,9 @@ const SimulationModal = ({
         try {
             const result = await simulationService.abortSimulation(simulation.id);
             if (result.success) {
-                // El WebSocket actualizará el estado final; actualizamos localmente también
-                toast.success('Simulation aborted successfully');
-                setFormData(prev => ({ ...prev, p_status: 'Aborted' }));
+                const state = result.data?.state || 'Aborting';
+                toast.success(state === 'Aborting' ? 'Cancellation requested; waiting for the worker to stop safely' : 'Simulation aborted');
+                setFormData(prev => ({ ...prev, p_status: state }));
             } else {
                 // Revertir el estado si el backend rechazó el abort
                 toast.error(`Error aborting simulation: ${result.error}`);
@@ -670,16 +671,16 @@ const SimulationModal = ({
         try {
             const result = await simulationService.rerunSimulation(simulation.id);
             if (result.success) {
-                // No actualizar manualmente el estado - dejar que el WebSocket lo maneje
-                // Esto evita inconsistencias entre frontend y backend
-                const isQueued = result.queued || result.status === 'Queued';
+                const accepted = result.data || {};
+                const nextStatus = accepted.status || (accepted.queued ? 'Queued' : 'Running');
+                setFormData(prev => ({ ...prev, p_status: nextStatus }));
+                setSimulations?.(prev => prev.map(sim => sim.id === simulation.id ? { ...sim, p_status: nextStatus } : sim));
+                const isQueued = accepted.queued || nextStatus === 'Queued';
                 const message = isQueued
                     ? 'Simulation queued for re-execution'
                     : 'Simulation re-run started';
                 toast.success(message);
-
-                // El estado se actualizará automáticamente vía WebSocket
-                console.log(`✅ Rerun iniciado para simulación ${simulation.id}, estado: ${result.status}`);
+                console.log(`✅ Rerun accepted for simulation ${simulation.id}, state: ${nextStatus}`);
             } else {
                 toast.error(`Error re-running simulation: ${result.error}`);
             }
@@ -1652,10 +1653,11 @@ const SimulationModal = ({
                                                     onClick={async () => {
                                                         setIsExecuting(true);
                                                         const now = new Date().toISOString();
-                                                        const optimisticStatus = hasQueuedOrRunning ? 'Queued' : 'Running';
-                                                        setFormData(prev => ({ ...prev, p_status: optimisticStatus, start_datetime: now }));
+                                                        setFormData(prev => ({ ...prev, p_status: 'Processing' }));
                                                         try {
-                                                            await executeSimulation(simulation.id, simulation);
+                                                            const accepted = await executeSimulation(simulation.id, simulation);
+                                                            if (accepted) setFormData(prev => ({ ...prev, p_status: accepted.status || (accepted.queued ? 'Queued' : 'Running'), start_datetime: accepted.start_datetime || now }));
+                                                            else setFormData(prev => ({ ...prev, p_status: simulation.p_status || 'Not started', start_datetime: null }));
                                                         } catch (error) {
                                                             setFormData(prev => ({ ...prev, p_status: 'Not started', start_datetime: null }));
                                                         } finally {

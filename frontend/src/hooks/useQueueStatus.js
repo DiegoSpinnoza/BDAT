@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 import simulationService from '../features/simulations/simulationService';
+import { API_BASE_URL } from '../services/apiBaseUrl';
 
 const useQueueStatus = (autoRefresh = true, refreshInterval = 5000) => {
     const [queueStatus, setQueueStatus] = useState({
@@ -16,25 +17,37 @@ const useQueueStatus = (autoRefresh = true, refreshInterval = 5000) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [socket, setSocket] = useState(null);
+    const requestRef = useRef(null);
 
     // Fetch queue status from API
     const fetchQueueStatus = useCallback(async () => {
+        if (requestRef.current) return requestRef.current;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const request = (async () => {
         try {
             setLoading(true);
             setError(null);
-            const status = await simulationService.getQueueStatus();
+            const status = await simulationService.getQueueStatus({ signal: controller.signal });
             setQueueStatus(status);
+            return status;
         } catch (err) {
-            setError(err.message);
+            if (err.name !== 'AbortError') setError(err.message);
             console.error('Error fetching queue status:', err);
+            return null;
         } finally {
             setLoading(false);
+            clearTimeout(timeout);
+            requestRef.current = null;
         }
+        })();
+        requestRef.current = request;
+        return request;
     }, []);
 
     // Initialize WebSocket connection
     useEffect(() => {
-        const socketConnection = io("http://localhost:5000", {
+        const socketConnection = io(API_BASE_URL, {
             transports: ["websocket"],
         });
 
@@ -54,7 +67,7 @@ const useQueueStatus = (autoRefresh = true, refreshInterval = 5000) => {
         // Listen for status updates that might affect queue
         socketConnection.on('simulation_status_update', (data) => {
             // Only refresh if it's a status that affects queue
-            const queueAffectingStatuses = ['Queued', 'Running', 'Paused', 'Finished', 'Aborted', 'Error'];
+            const queueAffectingStatuses = ['Queued', 'Running', 'Aborting', 'Paused', 'Finished', 'Aborted', 'Error'];
             if (queueAffectingStatuses.includes(data.state)) {
                 fetchQueueStatus();
             }

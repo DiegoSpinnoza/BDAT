@@ -1877,11 +1877,7 @@ def batch_run_simulations_service(request):
         ELIGIBLE_STATUSES = RUN_STATUSES | RERUN_STATUSES
         BLOCKED_STATUSES = {'Running', 'Aborting', 'Queued', 'Generating mesh', 'Mesh generation failed'}
 
-        from .queue_service import should_queue_simulation, queue_simulation
-        from ..models.simulation_model import update_simulation_status
-        from app import celery
-        from datetime import datetime
-        import time as _time
+        from .queue_service import queue_simulation, process_next_in_queue
 
         results = []
         queued_count = 0
@@ -1978,43 +1974,31 @@ def batch_run_simulations_service(request):
                     current_app.mysql.connection.commit()
                     cur.close()
 
-                # Decidir: encolar o ejecutar directamente
-                if should_queue_simulation():
-                    queue_simulation(sim_id)
+                if queue_simulation(sim_id):
                     results.append({'id': sim_id, 'status': 'queued', 'message': 'Queued'})
                     queued_count += 1
                 else:
-                    # Ejecutar directamente en Celery
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-                    task_id = f'simulation_{sim_id}_{timestamp}'
-
-                    update_simulation_status(
-                        current_app.mysql, sim_id, "Running",
-                        update_time_field='start_datetime',
-                        task_id=task_id
-                    )
-                    current_app.mysql.connection.commit()
-
-                    # Pequeña pausa para que los commits de status no colisionen en la cola
-                    _time.sleep(0.05)
-
-                    notificar_estado_simulacion(sim_id, 'Running')
-
-                    task = celery.send_task(
-                        'simulations.run_simulation',
-                        args=[sim_id, simulation_params],
-                        task_id=task_id
-                    )
-
-                    results.append({'id': sim_id, 'status': 'started', 'task_id': task.id})
-                    started_count += 1
+                    results.append({'id': sim_id, 'status': 'skipped', 'message': 'Could not enqueue simulation'})
+                    skipped_count += 1
 
             except Exception as sim_error:
                 print(f"❌ Error batch-running simulation {sim_id}: {sim_error}")
-                import traceback
-                traceback.print_exc()
                 results.append({'id': sim_id, 'status': 'error', 'message': str(sim_error)})
                 skipped_count += 1
+
+        # Dispatch once after all queue entries are durable; the dispatcher is
+        # idempotent and leaves a failed broker publish safely queued.
+        process_next_in_queue()
+        for item in results:
+            if item['status'] == 'queued':
+                cur = current_app.mysql.connection.cursor()
+                cur.execute("SELECT p_status, task_id FROM simulation WHERE id=%s", (item['id'],))
+                state_row = cur.fetchone()
+                cur.close()
+                if state_row and state_row[0] == 'Running':
+                    item['status'], item['task_id'] = 'started', state_row[1]
+        started_count = sum(1 for item in results if item['status'] == 'started')
+        queued_count = sum(1 for item in results if item['status'] == 'queued')
 
         return jsonify({
             'success': True,
@@ -2107,64 +2091,25 @@ def rerun_simulation_service(id):
         current_app.mysql.connection.commit()
         cur.close()
         
-        # ===== SISTEMA DE COLA =====
-        from .queue_service import should_queue_simulation, queue_simulation
-        
-        if should_queue_simulation():
-            queue_simulation(id)
-            return jsonify({
-                'message': 'Simulación encolada para re-ejecución',
-                'simulation_id': id,
-                'status': 'Queued',  # Capitalizado para consistencia
-                'queued': True,
-                'success': True
-            }), 202
-        else:
-            from ..models.simulation_model import update_simulation_status
-            
-            print(f"🔄 Re-ejecutando simulación {id}...")
-            print(f"📋 Parámetros: {simulation_params}")
-            
-            from app import celery
-            from datetime import datetime
-            
-            # Generar un task_id único para evitar conflictos con tareas revocadas
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            task_id = f'simulation_{id}_{timestamp}'
-            
-            # Actualizar estado a Running Y almacenar task_id
-            status, start_time = update_simulation_status(
-                current_app.mysql, id, "Running", 
-                update_time_field='start_datetime',
-                task_id=task_id
-            )
-            current_app.mysql.connection.commit()
-            print(f"✅ Estado actualizado a Running para simulación {id}")
-            print(f"🆔 Task ID almacenado en DB: {task_id}")
-
-            import time
-            time.sleep(0.1)
-            
-            notificar_estado_simulacion(id, 'Running')
-            print(f"📡 WebSocket emitido: Running para simulación {id}")
-            
-            print(f"🔧 Enviando tarea a Celery para simulación {id}...")
-            task = celery.send_task(
-                'simulations.run_simulation',
-                args=[id, simulation_params],
-                task_id=task_id
-            )
-            
-            print(f"✅ Tarea enviada a Celery. Simulation ID: {id}, Task ID: {task.id}")
-            print(f"📊 Estado de la tarea: {task.state}")
-            
-            return jsonify({
-                'message': 'Simulación re-ejecutada exitosamente',
-                'simulation_id': id,
-                'task_id': task.id,
-                'status': 'Running',
-                'success': True
-            }), 200
+        from .queue_service import queue_simulation, process_next_in_queue, get_queue_position
+        if not queue_simulation(id):
+            return jsonify({'success': False, 'error': 'No se pudo agregar la simulación a la cola'}), 409
+        dispatched = process_next_in_queue()
+        cur = current_app.mysql.connection.cursor()
+        cur.execute("SELECT p_status, task_id FROM simulation WHERE id=%s", (id,))
+        accepted = cur.fetchone()
+        cur.close()
+        status = accepted[0] if accepted else 'Queued'
+        return jsonify({
+            'message': 'Simulación encolada para re-ejecución' if status == 'Queued' else 'Simulación enviada a ejecución',
+            'simulation_id': id,
+            'task_id': accepted[1] if accepted else None,
+            'status': status,
+            'queued': status == 'Queued',
+            'queue_position': get_queue_position(id) if status == 'Queued' else None,
+            'dispatch_pending': bool(status == 'Queued' and not dispatched),
+            'success': True,
+        }), 202
             
     except Exception as e:
         print(f"❌ Error al re-ejecutar simulación {id}: {str(e)}")
@@ -2229,57 +2174,27 @@ def run_simulation_service(id, request):
             return jsonify({'error': f'Mesh XML file not found at {xml_path}. The mesh may have been deleted.'}), 400
         simulation_params['xml_file'] = xml_path
 
-        # ===== SISTEMA DE COLA =====
-        from .queue_service import should_queue_simulation, queue_simulation
+        # One durable DB queue handles both the immediate and deferred cases.
+        from .queue_service import queue_simulation, process_next_in_queue, get_queue_position
+        if not queue_simulation(id):
+            return jsonify({'error': f'Simulation {id} could not be added to the queue'}), 409
+        dispatched = process_next_in_queue()
 
-        if should_queue_simulation():
-            queue_simulation(id)
-            return jsonify({
-                'message': 'Simulación encolada. Se ejecutará cuando termine la simulación actual',
-                'simulation_id': id,
-                'status': 'Queued',
-                'queued': True
-            }), 202
-        else:
-            from ..models.simulation_model import update_simulation_status
-            from app import celery
-            from datetime import datetime
-
-            # Generar un task_id único para evitar conflictos con tareas revocadas
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            task_id = f'simulation_{id}_{timestamp}'
-
-            # Actualizar estado a Running Y almacenar task_id
-            status, start_time = update_simulation_status(
-                current_app.mysql, id, "Running",
-                update_time_field='start_datetime',
-                task_id=task_id
-            )
-            current_app.mysql.connection.commit()
-            print(f"✅ Estado actualizado a Running para simulación {id}")
-            print(f"🆔 Task ID almacenado en DB: {task_id}")
-
-            import time
-            time.sleep(0.1)
-
-            notificar_estado_simulacion(id, 'Running') #websocket
-
-            task = celery.send_task(
-                'simulations.run_simulation',
-                args=[id, simulation_params],
-                task_id=task_id
-            )
-
-            print(f"✅ Simulación {id} enviada a Celery. Task ID: {task.id}")
-
-            return jsonify({
-                'message': 'Simulación iniciada',
-                'simulation_id': id,
-                'task_id': task.id,
-                'status': status,
-                'queued': False,
-                'start_datetime': start_time.isoformat() + 'Z' if start_time else None
-            }), 202
+        cur = current_app.mysql.connection.cursor()
+        cur.execute("SELECT p_status, task_id, start_datetime FROM simulation WHERE id = %s", (id,))
+        accepted = cur.fetchone()
+        cur.close()
+        state = accepted[0] if accepted else 'Queued'
+        is_queued = state == 'Queued'
+        return jsonify({
+            'message': 'Simulación encolada y lista para ejecutarse' if is_queued else 'Simulación enviada a ejecución',
+            'simulation_id': id,
+            'task_id': accepted[1] if accepted else None,
+            'status': state,
+            'queued': is_queued,
+            'queue_position': get_queue_position(id) if is_queued else None,
+            'dispatch_pending': bool(is_queued and not dispatched),
+        }), 202
 
     except Exception as e:
         import traceback
@@ -2295,10 +2210,16 @@ def run_simulation_service(id, request):
             cur_chk.close()
             chk_status = chk_row[0] if chk_row else None
             # Solo marcar Error si la sim quedó en Running (ya la cambiamos antes de enviar a Celery)
-            if chk_status == 'Running':
+            if chk_status == 'Running' and 'task_id' in locals():
                 from ..models.simulation_model import update_simulation_status
-                update_simulation_status(current_app.mysql, id, "Error", update_time_field='finish_datetime')
-                notificar_estado_simulacion(id, "Error")
+                cur_restore = current_app.mysql.connection.cursor()
+                cur_restore.execute("""UPDATE simulation SET p_status='Queued', task_id=NULL,
+                    start_datetime=NULL, queue_order=1 WHERE id=%s AND p_status='Running'""", (id,))
+                current_app.mysql.connection.commit()
+                cur_restore.close()
+                from .queue_service import compact_queue
+                compact_queue()
+                notificar_estado_simulacion(id, "Queued", queue_position=1)
         except Exception:
             pass
         return jsonify({'error': error_msg}), 500
@@ -2462,169 +2383,99 @@ def notificar_estado_simulacion(id, estado, queue_position=None):
 
 
 def abort_simulation_service(id):
-    """Abort a queued or running Celery simulation task"""
+    """Request a cooperative stop and return immediately; the worker owns finalization."""
     try:
         sim_id = int(id)
+        mysql = current_app.mysql
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT p_status, task_id FROM simulation WHERE id = %s FOR UPDATE", (sim_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"status": "error", "message": f"Simulation {sim_id} not found"}), 404
+        state, task_id = row
+        if state in ('Finished', 'Aborted', 'Error', 'Failed', 'Mesh generation failed', 'Not started'):
+            cur.close()
+            return jsonify({"status": "error", "message": f"Simulation {sim_id} is already {state}"}), 409
+        if state == 'Aborting':
+            cur.close()
+            return jsonify({"status": "success", "message": "La cancelación ya está en curso", "state": "Aborting"}), 202
 
-        # Obtener estado actual y task_id de la DB
-        cur = current_app.mysql.connection.cursor()
-        cur.execute("SELECT p_status, task_id FROM simulation WHERE id = %s", (sim_id,))
-        result = cur.fetchone()
+        if state == 'Queued':
+            cur.execute("""UPDATE simulation SET p_status='Aborted', queue_order=NULL,
+                finish_datetime=UTC_TIMESTAMP(), execution_time=NULL, task_id=NULL
+                WHERE id=%s AND p_status='Queued'""", (sim_id,))
+            mysql.connection.commit()
+            cur.close()
+            from .queue_service import compact_queue, process_next_in_queue
+            compact_queue()
+            notificar_estado_simulacion(sim_id, 'Aborted')
+            process_next_in_queue()
+            return jsonify({"status": "success", "message": "Simulación retirada de la cola", "state": "Aborted"}), 202
+
+        if state != 'Running':
+            cur.close()
+            return jsonify({"status": "error", "message": f"Estado inesperado: {state}"}), 409
+
+        cur.execute("UPDATE simulation SET p_status='Aborting' WHERE id=%s AND p_status='Running'", (sim_id,))
+        mysql.connection.commit()
         cur.close()
 
-        if not result:
-            return jsonify({"status": "error", "message": f"Simulation {sim_id} not found"}), 404
-
-        db_status = result[0]
-        task_id = result[1]
-
-        print(f"Abort request for simulation {sim_id}: status='{db_status}', task_id='{task_id}'")
-
-        # Estados terminales - no se pueden abortar
-        terminal_states = {'Finished', 'Aborted', 'Error', 'Failed', 'Mesh generation failed'}
-        if db_status in terminal_states:
-            return jsonify({
-                "status": "error",
-                "message": f"Simulation {sim_id} cannot be aborted (already in terminal state: {db_status})"
-            }), 400
-
-        if db_status in ('Not started', 'Generating mesh'):
-            return jsonify({
-                "status": "error",
-                "message": f"Simulation {sim_id} has not started yet (status: {db_status}). Nothing to abort."
-            }), 400
-
-        if db_status == 'Aborting':
-            # Ya en proceso de aborto - idempotente
-            print(f"Simulation {sim_id} is already aborting")
-            return jsonify({"status": "success", "message": f"Simulation {sim_id} is already being aborted"})
-
-        # Estados abortables: Running y Queued
-        if db_status not in ('Running', 'Queued'):
-            return jsonify({
-                "status": "error",
-                "message": f"Simulation {sim_id} has unexpected status '{db_status}'. Cannot abort."
-            }), 400
-
-        from app import celery
-
-        # Si la simulación está Queued (no se inició en Celery), basta con cambiar estado directamente
-        if db_status == 'Queued':
-            print(f"Simulation {sim_id} is Queued (never started), resetting to Not started")
-            # Limpiar queue_order, tiempos y marcar como Not started
-            cur_abort = current_app.mysql.connection.cursor()
-            cur_abort.execute("""
-                UPDATE simulation
-                SET p_status = 'Not started', 
-                    queue_order = NULL, 
-                    start_datetime = NULL,
-                    finish_datetime = NULL,
-                    execution_time = NULL,
-                    task_id = NULL
-                WHERE id = %s
-            """, (sim_id,))
-            current_app.mysql.connection.commit()
-            cur_abort.close()
-            notificar_estado_simulacion(sim_id, "Not started")
-            print(f"Simulation {sim_id} (Queued) reset to Not started")
-
-            # Generar espacio de cola y procesar siguiente (si aplica)
-            try:
-                from .queue_service import process_next_in_queue, compact_queue
-                compact_queue()
-                process_next_in_queue()
-            except Exception as queue_err:
-                print(f"Error processing queue after abort: {queue_err}")
-
-            return jsonify({
-                "status": "success",
-                "message": f"Simulation {sim_id} dequeued and aborted successfully",
-                "previous_status": db_status
-            })
-
-        # 1. Marcar en DB como "Aborting" PRIMERO para que el worker lo detecte
-        update_simulation_status(current_app.mysql, sim_id, "Aborting")
-        notificar_estado_simulacion(sim_id, "Aborting")
-        print(f"Simulation {sim_id} marked as Aborting in DB")
-
-        # 2. Revocar la tarea de Celery si hay task_id
-        if task_id:
-            try:
-                # SIGTERM primero (graceful) - el worker detectara el estado Aborting en DB
-                celery.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                print(f"SIGTERM sent to Celery task {task_id}")
-
-                # Esperar brevemente antes de escalar
-                import time
-                time.sleep(2)
-
-                # Verificar si la task sigue activa y escalar con SIGKILL
-                try:
-                    from celery.result import AsyncResult
-                    res = AsyncResult(task_id, app=celery)
-                    if res.state in ('STARTED', 'PENDING', 'RETRY', 'PROGRESS'):
-                        print(f"Task {task_id} still active ({res.state}), sending SIGKILL")
-                        celery.control.revoke(task_id, terminate=True, signal='SIGKILL')
-                    else:
-                        print(f"Task {task_id} already stopped (state: {res.state})")
-                except Exception as check_err:
-                    print(f"Cannot check task state ({check_err}), sending SIGKILL as precaution")
-                    celery.control.revoke(task_id, terminate=True, signal='SIGKILL')
-
-            except Exception as revoke_err:
-                print(f"Error revoking Celery task {task_id}: {revoke_err}")
-        else:
-            print(f"No task_id for simulation {sim_id} (status={db_status}) - forcing Aborted state")
-
-        # 3. Crear archivo de senal de aborto como mecanismo adicional para el worker
+        # Shared signal lets the numerical routines stop at their safe checkpoints.
         try:
             import tempfile
             signal_dir = '/app/temp_signals' if os.environ.get('DOCKER_ENV') else tempfile.gettempdir()
             os.makedirs(signal_dir, exist_ok=True)
-            abort_signal_file = os.path.join(signal_dir, f'abort_sim_{sim_id}.signal')
-            with open(abort_signal_file, 'w') as f:
-                f.write(f'abort:{sim_id}:{task_id or "no_task"}')
-            print(f"Abort signal file created: {abort_signal_file}")
-        except Exception as sig_err:
-            print(f"Could not create abort signal file: {sig_err}")
+            with open(os.path.join(signal_dir, f'abort_sim_{sim_id}.signal'), 'w') as signal_file:
+                signal_file.write(f'abort:{sim_id}:{task_id or "no_task"}')
+        except Exception as signal_error:
+            print(f"Could not create abort signal for simulation {sim_id}: {signal_error}")
 
-        # 4. Marcar definitivamente como Not started en DB (limpiando queue_order y tiempos)
-        cur_fin = current_app.mysql.connection.cursor()
-        cur_fin.execute("""
-            UPDATE simulation
-            SET p_status = 'Not started', 
-                queue_order = NULL, 
-                start_datetime = NULL,
-                finish_datetime = NULL,
-                execution_time = NULL,
-                task_id = NULL
-            WHERE id = %s
-        """, (sim_id,))
-        current_app.mysql.connection.commit()
-        cur_fin.close()
-        notificar_estado_simulacion(sim_id, "Not started")
-        print(f"Simulation {sim_id} reset to Not started successfully")
+        if task_id:
+            try:
+                from app import celery
+                celery.control.revoke(task_id, terminate=False)
+                active = celery.control.inspect(timeout=0.5).active()
+                active_ids = {
+                    task.get('id')
+                    for worker_tasks in (active or {}).values()
+                    for task in worker_tasks
+                }
+                # A revoked task that has not started cannot update the DB by
+                # itself. Fence it as terminal; the task id check protects the
+                # small race where a worker begins immediately after inspection.
+                if active is not None and task_id not in active_ids:
+                    cur = mysql.connection.cursor()
+                    cur.execute("UPDATE simulation SET p_status='Aborted', finish_datetime=UTC_TIMESTAMP(), task_id=NULL WHERE id=%s AND p_status='Aborting'", (sim_id,))
+                    mysql.connection.commit()
+                    cur.close()
+            except Exception as revoke_error:
+                # The worker checks DB status and the signal file even if Redis is down.
+                print(f"Celery revoke deferred for simulation {sim_id}: {revoke_error}")
+        else:
+            cur = mysql.connection.cursor()
+            cur.execute("UPDATE simulation SET p_status='Aborted', finish_datetime=UTC_TIMESTAMP() WHERE id=%s AND p_status='Aborting'", (sim_id,))
+            mysql.connection.commit()
+            cur.close()
 
-        # 5. Procesar siguiente en cola
-        try:
-            from .queue_service import process_next_in_queue
-            print(f"Checking queue after aborting simulation {sim_id}")
-            process_next_in_queue()
-        except Exception as queue_err:
-            print(f"Error processing queue after abort: {queue_err}")
-
-        return jsonify({
-            "status": "success",
-            "message": f"Simulation {sim_id} aborted successfully",
-            "previous_status": db_status
-        })
-
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT p_status FROM simulation WHERE id=%s", (sim_id,))
+        latest = cur.fetchone()
+        cur.close()
+        final_state = latest[0] if latest else 'Aborting'
+        notificar_estado_simulacion(sim_id, final_state)
+        if final_state == 'Aborted':
+            try:
+                from .queue_service import process_next_in_queue
+                process_next_in_queue()
+            except Exception as queue_error:
+                print(f"Queue dispatch after cancellation failed: {queue_error}")
+        return jsonify({"status": "success", "message": "Cancelación solicitada", "state": final_state}), 202
     except ValueError:
         return jsonify({"status": "error", "message": f"Invalid simulation ID: {id}"}), 400
     except Exception as e:
-        import traceback
-        print(f"Error aborting simulation {id}: {str(e)}")
-        traceback.print_exc()
+        current_app.mysql.connection.rollback()
+        print(f"Error aborting simulation {id}: {e}")
         return jsonify({"status": "error", "message": f"Error aborting simulation: {str(e)}"}), 500
 
 def list_mesh_files_service():
@@ -2920,7 +2771,43 @@ def resume_simulation_service(id):
 def get_queue_status_service():
     """Get current queue status"""
     try:
-        queue_status = queue_manager.get_queue_status()
+        from .queue_service import process_next_in_queue
+        # A queue left waiting while Redis was offline gets another dispatch
+        # attempt whenever the UI refreshes its authoritative queue snapshot.
+        process_next_in_queue()
+        cur = current_app.mysql.connection.cursor()
+        cur.execute("""
+            SELECT id, sim_name, p_status, start_datetime, queue_order
+            FROM simulation
+            WHERE p_status IN ('Queued', 'Running', 'Aborting', 'Paused')
+            ORDER BY CASE WHEN p_status = 'Queued' THEN 0 ELSE 1 END,
+                     COALESCE(queue_order, id), id
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        queue_items, running_items, paused_items = [], [], []
+        for sim_id, sim_name, state, start_time, queue_order in rows:
+            item = {'id': int(sim_id), 'name': sim_name, 'state': state}
+            if start_time:
+                item['start_time'] = start_time.isoformat() + 'Z'
+            if state == 'Queued':
+                item['priority'] = 'NORMAL'
+                item['queue_position'] = queue_order
+                queue_items.append(item)
+            elif state == 'Paused':
+                paused_items.append(item)
+            else:
+                running_items.append(item)
+        queue_status = {
+            'queue': queue_items,
+            'running': running_items,
+            'paused': paused_items,
+            'queue_size': len(queue_items),
+            'running_count': len(running_items),
+            'paused_count': len(paused_items),
+            'max_concurrent': 1,
+            'can_start_new': len(running_items) == 0,
+        }
         return jsonify({
             "status": "success",
             "queue_status": queue_status
@@ -3085,11 +2972,7 @@ def run_all_simulations_service(request):
                 'results': []
             }), 200
 
-        from .queue_service import should_queue_simulation, queue_simulation
-        from ..models.simulation_model import update_simulation_status
-        from app import celery
-        from datetime import datetime
-        import time as _time
+        from .queue_service import queue_simulation, process_next_in_queue
 
         results      = []
         started_count = 0
@@ -3146,33 +3029,24 @@ def run_all_simulations_service(request):
                 current_app.mysql.connection.commit()
                 cur_clean.close()
 
-            # Ejecutar o encolar
-            if should_queue_simulation():
-                queue_simulation(sim_id)
+            if queue_simulation(sim_id):
                 results.append({'id': sim_id, 'status': 'queued'})
                 queued_count += 1
             else:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-                task_id   = f'simulation_{sim_id}_{timestamp}'
+                results.append({'id': sim_id, 'status': 'skipped', 'message': 'Could not enqueue simulation'})
+                skipped_count += 1
 
-                update_simulation_status(
-                    current_app.mysql, sim_id, 'Running',
-                    update_time_field='start_datetime',
-                    task_id=task_id
-                )
-                current_app.mysql.connection.commit()
-                _time.sleep(0.05)
-
-                notificar_estado_simulacion(sim_id, 'Running')
-
-                task = celery.send_task(
-                    'simulations.run_simulation',
-                    args=[sim_id, simulation_params],
-                    task_id=task_id
-                )
-
-                results.append({'id': sim_id, 'status': 'started', 'task_id': task.id})
-                started_count += 1
+        process_next_in_queue()
+        for item in results:
+            if item['status'] == 'queued':
+                cur = current_app.mysql.connection.cursor()
+                cur.execute("SELECT p_status, task_id FROM simulation WHERE id=%s", (item['id'],))
+                state_row = cur.fetchone()
+                cur.close()
+                if state_row and state_row[0] == 'Running':
+                    item['status'], item['task_id'] = 'started', state_row[1]
+        started_count = sum(1 for item in results if item['status'] == 'started')
+        queued_count = sum(1 for item in results if item['status'] == 'queued')
 
         total_triggered = started_count + queued_count
         return jsonify({
@@ -3199,112 +3073,39 @@ def run_all_simulations_service(request):
 #  Aborta las Running/Aborting y desencola las Queued.
 # ==============================================================================
 def abort_all_simulations_service():
-    """
-    Detiene todo:
-    - Simulaciones Running → marcadas como Aborting + señal al worker
-    - Simulaciones Queued  → marcadas directamente como Aborted + queue_order=NULL
-    """
+    """Request cooperative cancellation for every active or queued simulation."""
     try:
-        from ..models.simulation_model import update_simulation_status
-
-        # Obtener Running y Queued
         cur = current_app.mysql.connection.cursor()
-        cur.execute("""
-            SELECT id, p_status, task_id
-            FROM simulation
-            WHERE p_status IN ('Running', 'Aborting', 'Queued')
-            ORDER BY id
-        """)
-        rows = cur.fetchall()
+        cur.execute("SELECT id FROM simulation WHERE p_status IN ('Running', 'Aborting', 'Queued') ORDER BY id")
+        ids = [row[0] for row in cur.fetchall()]
         cur.close()
-
-        if not rows:
-            return jsonify({
-                'success': True,
-                'message': 'Nothing to stop',
-                'summary': {'aborted': 0, 'dequeued': 0}
-            }), 200
-
-        from app import celery
-        import os, tempfile
-
-        aborted_count  = 0
-        dequeued_count = 0
-        results        = []
-
-        for row in rows:
-            sim_id, status, task_id = row[0], row[1], row[2]
-
-            try:
-                if status == 'Queued':
-                    # Dequeue directo
-                    cur_upd = current_app.mysql.connection.cursor()
-                    cur_upd.execute("""
-                        UPDATE simulation
-                        SET p_status = 'Aborted', queue_order = NULL, finish_datetime = NOW()
-                        WHERE id = %s
-                    """, (sim_id,))
-                    current_app.mysql.connection.commit()
-                    cur_upd.close()
-                    notificar_estado_simulacion(sim_id, 'Aborted')
-                    results.append({'id': sim_id, 'action': 'dequeued'})
-                    dequeued_count += 1
-
-                elif status in ('Running', 'Aborting'):
-                    # 1. Marcar como Aborting en DB
-                    update_simulation_status(current_app.mysql, sim_id, 'Aborting')
-                    notificar_estado_simulacion(sim_id, 'Aborting')
-
-                    # 2. Revocar tarea Celery
-                    if task_id:
-                        try:
-                            celery.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                            print(f"🚫 Revoked Celery task {task_id} for simulation {sim_id}")
-                        except Exception as rev_err:
-                            print(f"⚠️ Could not revoke task {task_id}: {rev_err}")
-
-                    # 3. Señal de aborto en archivo
-                    try:
-                        signal_dir = '/app/temp_signals' if os.environ.get('DOCKER_ENV') else tempfile.gettempdir()
-                        os.makedirs(signal_dir, exist_ok=True)
-                        signal_path = os.path.join(signal_dir, f'abort_sim_{sim_id}.signal')
-                        with open(signal_path, 'w') as f:
-                            f.write('abort')
-                    except Exception:
-                        pass
-
-                    # 4. Marcar Aborted
-                    cur_fin = current_app.mysql.connection.cursor()
-                    cur_fin.execute("""
-                        UPDATE simulation
-                        SET p_status = 'Aborted', queue_order = NULL, finish_datetime = NOW()
-                        WHERE id = %s
-                    """, (sim_id,))
-                    current_app.mysql.connection.commit()
-                    cur_fin.close()
-                    notificar_estado_simulacion(sim_id, 'Aborted')
-                    results.append({'id': sim_id, 'action': 'aborted'})
-                    aborted_count += 1
-
-            except Exception as sim_err:
-                print(f"❌ Error stopping simulation {sim_id}: {sim_err}")
-                results.append({'id': sim_id, 'action': 'error', 'message': str(sim_err)})
-
-        total_stopped = aborted_count + dequeued_count
+        aborted = dequeued = pending = 0
+        results = []
+        for sim_id in ids:
+            response = abort_simulation_service(sim_id)
+            payload, status_code = response if isinstance(response, tuple) else (response, 200)
+            if status_code >= 400:
+                results.append({'id': sim_id, 'action': 'error'})
+                continue
+            state = payload.get_json(silent=True) or {}
+            current = state.get('state')
+            if current == 'Aborting':
+                pending += 1
+                results.append({'id': sim_id, 'action': 'cancelling'})
+            else:
+                aborted += 1
+                if state.get('message') == 'Simulación retirada de la cola':
+                    dequeued += 1
+                results.append({'id': sim_id, 'action': 'aborted'})
         return jsonify({
             'success': True,
-            'message': f'{total_stopped} simulation(s) stopped ({aborted_count} aborted, {dequeued_count} dequeued)',
-            'summary': {
-                'aborted':  aborted_count,
-                'dequeued': dequeued_count,
-            },
-            'results': results
+            'message': f'{len(results)} simulation(s) cancellation requested',
+            'summary': {'aborted': aborted, 'dequeued': dequeued, 'cancelling': pending},
+            'results': results,
         }), 200
-
     except Exception as e:
-        import traceback
-        print(f"❌ Error in abort_all_simulations_service: {e}")
-        traceback.print_exc()
+        current_app.mysql.connection.rollback()
+        print(f"Error stopping all simulations: {e}")
         return jsonify({'error': str(e)}), 500
 
 

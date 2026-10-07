@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../../services/apiBaseUrl';
 
 const ResultsVisualization = ({ simulationId, results }) => {
   const [loading, setLoading] = useState(true);
@@ -9,7 +10,7 @@ const ResultsVisualization = ({ simulationId, results }) => {
   useEffect(() => {
     if (simulationId) {
       setLoading(true);
-      fetch(`http://localhost:5000/simulations/${simulationId}/visualization`)
+      fetch(`${API_BASE_URL}/simulations/${simulationId}/visualization`)
         .then(response => {
           if (!response.ok) {
             throw new Error('Error fetching visualization data');

@@ -3,8 +3,9 @@ import { X, GripVertical, Trash2, Clock, ArrowUp, ArrowDown, RefreshCw, Hash, La
 import { io } from 'socket.io-client';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
+import { API_BASE_URL } from '../../services/apiBaseUrl';
 
-const API = "http://localhost:5000/";
+const API = `${API_BASE_URL}/`;
 
 const QueueView = ({ isOpen, onClose }) => {
     const toast = useToast();
@@ -51,7 +52,7 @@ const QueueView = ({ isOpen, onClose }) => {
                         return prev;
                     }
                 });
-            } else if (data.estado === 'Running' || data.estado === 'Not started') {
+            } else if (['Running', 'Aborting', 'Aborted', 'Not started', 'Error'].includes(data.estado)) {
                 setQueuedSimulations(prev => prev.filter(sim => sim.id !== simId));
             }
         });

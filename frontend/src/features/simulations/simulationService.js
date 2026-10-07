@@ -1,5 +1,5 @@
 // src/services/simulationService.js
-const API_BASE_URL = 'http://localhost:5000';
+import { API_BASE_URL } from '../../services/apiBaseUrl';
 
 class SimulationService {
   constructor() {
@@ -21,6 +21,7 @@ class SimulationService {
       BATCH_RUN_SIMULATIONS: `${this.baseURL}/simulations/batch/run`,
       RUN_ALL_SIMULATIONS: `${this.baseURL}/simulations/run-all`,
       ABORT_ALL_SIMULATIONS: `${this.baseURL}/simulations/abort-all`,
+      QUEUE_STATUS: `${this.baseURL}/simulations/queue/status`,
       DOWNLOAD_BATCH_ZIP: `${this.baseURL}/simulations/batch/download-zip`,
       IMPORT_START: `${this.baseURL}/simulations/import/start`,
       IMPORT_UPDATE: `${this.baseURL}/simulations/import/update`,
@@ -229,23 +230,37 @@ class SimulationService {
   }
 
   async executeSimulation(simulationId, simulationData) {
+    let timeout;
     try {
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), 15000);
       const response = await fetch(this.endpoints.EXECUTE_SIMULATION(simulationId), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(simulationData),
+        signal: controller.signal,
       });
-
-      if (!response.ok) {
-        throw new Error(`Error al ejecutar simulación: ${response.status}`);
-      }
-      return await response.json();
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || result.error || `Error al ejecutar simulación (HTTP ${response.status})`);
+      return result;
     } catch (error) {
+      if (error.name === 'AbortError') throw new Error('El servidor tardó demasiado en responder. La cola se actualizará automáticamente; verifica el estado antes de volver a iniciar.');
       console.error('❌ Error al ejecutar simulación:', error);
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
+  }
+
+  async getQueueStatus({ signal } = {}) {
+    const response = await fetch(this.endpoints.QUEUE_STATUS, { signal });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.status === 'error') {
+      throw new Error(result.message || `No se pudo consultar la cola (HTTP ${response.status})`);
+    }
+    return result.queue_status || result;
   }
 
   async downloadSimulationsZip(ids = [], isAll = false, contentType = 'all', defaultFilename = null) {

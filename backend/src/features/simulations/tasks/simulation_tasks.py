@@ -78,6 +78,18 @@ def run_simulation_task(sim_id, simulation_params):
     
     with app.app_context():
         try:
+            # A broker publish can time out after Redis accepted the message.
+            # The DB task id is the fencing token that prevents that stale
+            # delivery from racing a later retry of the same simulation.
+            cur_fence = app.mysql.connection.cursor()
+            cur_fence.execute("SELECT p_status, task_id FROM simulation WHERE id=%s", (sim_id,))
+            fence_row = cur_fence.fetchone()
+            cur_fence.close()
+            delivered_task_id = getattr(getattr(current_task, 'request', None), 'id', None)
+            if not fence_row or fence_row[0] not in ('Running', 'Aborting') or (fence_row[1] and delivered_task_id and fence_row[1] != delivered_task_id):
+                print(f"Ignoring stale delivery for simulation {sim_id}: task={delivered_task_id}, db={fence_row}")
+                return {'status': 'superseded', 'simulation_id': sim_id}
+
             # ===== Pre-chequeos antes de cambiar a Running =====
             xml_file = simulation_params.get('xml_file')
             if not xml_file:
@@ -138,23 +150,26 @@ def run_simulation_task(sim_id, simulation_params):
                     print(f"⚠️ Simulation {sim_id} already marked as {pre_run_status[0]} in DB before execution")
 
             if abort_detected:
-                print(f"⚠️ Simulation {sim_id} was aborted before execution started (resetting to Not started)")
+                print(f"⚠️ Simulation {sim_id} was aborted before execution started")
                 cur_res = app.mysql.connection.cursor()
                 cur_res.execute("""
                     UPDATE simulation 
-                    SET p_status = 'Not started', 
-                        start_datetime = NULL, 
-                        finish_datetime = NULL, 
-                        execution_time = NULL, 
+                    SET p_status = 'Aborted',
+                        finish_datetime = UTC_TIMESTAMP(),
                         task_id = NULL,
                         queue_order = NULL
-                    WHERE id = %s
+                    WHERE id = %s AND p_status IN ('Aborting', 'Aborted')
                 """, (sim_id,))
                 app.mysql.connection.commit()
                 cur_res.close()
-                notificar_estado_worker(sim_id, "Not started", app)
+                notificar_estado_worker(sim_id, "Aborted", app)
+                try:
+                    from ..services.queue_service import process_next_in_queue
+                    process_next_in_queue()
+                except Exception as queue_error:
+                    print(f"⚠️ Queue dispatch after early abort failed: {queue_error}")
                 return {
-                    'status': 'not_started',
+                    'status': 'aborted',
                     'simulation_id': sim_id,
                     'message': 'Simulation was aborted before execution started'
                 }
@@ -231,21 +246,19 @@ def run_simulation_task(sim_id, simulation_params):
             # sandwich.py y otros scripts retornan (None, None) cuando detectan la señal de
             # aborto en medio de la ejecución, en lugar de lanzar una excepción.
             if result is None or (isinstance(result, (tuple, list)) and len(result) >= 1 and result[0] is None):
-                print(f"⚠️ Simulación {sim_id} abortada (script retornó None). Reiniciando a Not started.")
+                print(f"⚠️ Simulación {sim_id} abortada (script retornó None).")
                 cur_res = app.mysql.connection.cursor()
                 cur_res.execute("""
                     UPDATE simulation 
-                    SET p_status = 'Not started', 
-                        start_datetime = NULL, 
-                        finish_datetime = NULL, 
-                        execution_time = NULL, 
+                    SET p_status = 'Aborted',
+                        finish_datetime = UTC_TIMESTAMP(),
                         task_id = NULL,
                         queue_order = NULL
-                    WHERE id = %s
+                    WHERE id = %s AND p_status IN ('Aborting', 'Running')
                 """, (sim_id,))
                 app.mysql.connection.commit()
                 cur_res.close()
-                notificar_estado_worker(sim_id, "Not started", app)
+                notificar_estado_worker(sim_id, "Aborted", app)
                 try:
                     from ..services.queue_service import process_next_in_queue
                     print(f"🔄 Verificando si hay simulaciones en cola (después de aborto)...")
@@ -341,7 +354,25 @@ def run_simulation_task(sim_id, simulation_params):
                     }
             
             # Actualizar base de datos solo si no fue abortada
-            update_simulation_result(app.mysql, sim_id, filename, "Finished", tiempo_ejecucion, file_content, mesh_data)
+            result_committed = update_simulation_result(app.mysql, sim_id, filename, "Finished", tiempo_ejecucion, file_content, mesh_data)
+            if not result_committed:
+                cur = app.mysql.connection.cursor()
+                cur.execute("SELECT p_status FROM simulation WHERE id=%s", (sim_id,))
+                current = cur.fetchone()
+                cur.close()
+                if current and current[0] in ('Aborting', 'Aborted'):
+                    cur = app.mysql.connection.cursor()
+                    cur.execute("UPDATE simulation SET p_status='Aborted', finish_datetime=UTC_TIMESTAMP(), task_id=NULL WHERE id=%s AND p_status='Aborting'", (sim_id,))
+                    app.mysql.connection.commit()
+                    cur.close()
+                    notificar_estado_worker(sim_id, 'Aborted', app)
+                    try:
+                        from ..services.queue_service import process_next_in_queue
+                        process_next_in_queue()
+                    except Exception as queue_error:
+                        print(f"⚠️ Queue dispatch after abort finalization failed: {queue_error}")
+                    return {'status': 'aborted', 'simulation_id': sim_id, 'message': 'Simulation aborted before result commit'}
+                raise RuntimeError(f'Simulation {sim_id} was no longer running when results were committed')
             
             # ============================================================
             #  GENERAR GRÁFICOS DE RESULTADOS
@@ -379,6 +410,17 @@ def run_simulation_task(sim_id, simulation_params):
             
             if final_status_result and final_status_result[0] in ('Aborted', 'Aborting'):
                 print(f"⚠️ Simulación {sim_id} fue abortada. No se cambiará a Finished.")
+                if final_status_result[0] == 'Aborting':
+                    cur_abort = app.mysql.connection.cursor()
+                    cur_abort.execute("UPDATE simulation SET p_status='Aborted', finish_datetime=UTC_TIMESTAMP(), task_id=NULL WHERE id=%s AND p_status='Aborting'", (sim_id,))
+                    app.mysql.connection.commit()
+                    cur_abort.close()
+                    notificar_estado_worker(sim_id, 'Aborted', app)
+                    try:
+                        from ..services.queue_service import process_next_in_queue
+                        process_next_in_queue()
+                    except Exception as queue_error:
+                        print(f"⚠️ Queue dispatch after abort finalization failed: {queue_error}")
                 return {
                     'status': 'aborted',
                     'simulation_id': sim_id,
@@ -486,8 +528,12 @@ def run_simulation_task(sim_id, simulation_params):
             if is_abort:
                 # Si ya está marcado como Aborted por el backend, no cambiar
                 if current_status in ('Aborted', 'Aborting'):
-                    print(f"✅ Simulación {sim_id} ya está marcada como {current_status} por el backend")
-                    final_status = current_status
+                    print(f"✅ Simulación {sim_id} abortada")
+                    final_status = 'Aborted'
+                    cur_res = app.mysql.connection.cursor()
+                    cur_res.execute("UPDATE simulation SET p_status='Aborted', finish_datetime=UTC_TIMESTAMP(), task_id=NULL, queue_order=NULL WHERE id=%s AND p_status IN ('Aborting', 'Aborted')", (sim_id,))
+                    app.mysql.connection.commit()
+                    cur_res.close()
                 else:
                     # Regresar a Not started si fue abortado por el usuario
                     final_status = "Not started"
@@ -569,6 +615,10 @@ def run_simulation_task(sim_id, simulation_params):
             
             # Si fue abortado, retornar resultado sin lanzar excepción
             if is_abort:
+                try:
+                    notificar_estado_worker(sim_id, 'Aborted', app)
+                except Exception:
+                    pass
                 return {
                     'status': 'aborted',
                     'simulation_id': sim_id,
