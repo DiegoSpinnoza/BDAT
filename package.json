@@ -4,7 +4,8 @@
   "private": true,
   "description": "BDAT desktop packaging workspace",
   "scripts": {
-    "desktop:install-deps": "npm --prefix electron install",
+    "desktop:install-deps": "npm --prefix frontend ci && npm --prefix electron ci",
+    "desktop:dev": "npm --prefix frontend run build && npm --prefix electron start",
     "desktop:build": "npm --prefix frontend run build && npm --prefix electron run dist"
   }
 }
