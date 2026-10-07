@@ -6,11 +6,8 @@ ENV HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
 ENV HDF5_LIBDIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
 ENV HDF5_INCDIR=/usr/include/hdf5/serial
 
-RUN sed -i \
-      -e 's|http://archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
-      -e 's|http://security.ubuntu.com/ubuntu|https://security.ubuntu.com/ubuntu|g' \
-      /etc/apt/sources.list \
-    && apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update \
+RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+      -o APT::Update::Error-Mode=any update \
     && apt-get install -y \
     gfortran build-essential \
     python3 python3-pip libmysqlclient-dev python3-dev git make cmake \
