@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BDAT · Recorrido por la aplicación</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #172033;
+      background: #f4f7fb;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --ink: #172033;
+      --muted: #64748b;
+      --line: rgba(148, 163, 184, .25);
+      --accent: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    .showcase {
+      width: min(100%, 1180px);
+      margin: 0 auto;
+      padding: clamp(20px, 4vw, 48px);
+    }
+    .heading { margin: 0 auto 22px; max-width: 760px; text-align: center; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px; margin-bottom: 12px;
+      color: #315cbb; font-size: 11px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 20px; height: 2px; background: currentColor; border-radius: 2px; }
+    h1 { margin: 0; color: var(--ink); font-size: clamp(26px, 4vw, 42px); letter-spacing: -.045em; line-height: 1.08; }
+    .intro { max-width: 610px; margin: 12px auto 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+    .carousel {
+      overflow: hidden; border: 1px solid var(--line); border-radius: 22px;
+      background: #fff; box-shadow: 0 22px 70px rgba(30, 55, 95, .12);
+    }
+    .stage { position: relative; overflow: hidden; background: #e7edf5; aspect-ratio: 16 / 9; }
+    .slide {
+      position: absolute; inset: 0; display: grid; place-items: center; padding: 14px;
+      opacity: 0; transform: translateX(20px) scale(.992);
+      transition: opacity 430ms ease, transform 540ms cubic-bezier(.2,.7,.2,1);
+      pointer-events: none;
+    }
+    .slide.is-active { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
+    .slide img {
+      display: block; width: 100%; height: 100%; object-fit: contain;
+      border-radius: 11px; box-shadow: 0 12px 32px rgba(15, 23, 42, .14);
+      background: #fff;
+    }
+    .caption-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px 15px; }
+    .caption { min-width: 0; }
+    .caption h2 { margin: 0; font-size: clamp(15px, 2vw, 19px); letter-spacing: -.02em; }
+    .caption p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .counter { flex: 0 0 auto; color: #8290a5; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .controls {
+      display: flex; align-items: center; gap: 8px; padding: 0 18px 16px;
+    }
+    .controls button {
+      display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line);
+      border-radius: 50%; color: #334155; background: #fff; cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+    }
+    .controls button:hover { color: var(--accent); border-color: #bfcef8; background: #f5f8ff; }
+    .controls button:active { transform: scale(.96); }
+    .controls button:focus-visible { outline: 3px solid #93b4ff; outline-offset: 3px; }
+    .controls button svg { width: 17px; height: 17px; }
+    .dots { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; }
+    .dots button {
+      display: block; width: 7px; height: 7px; padding: 0; border: 0;
+      border-radius: 999px; background: #cbd5e1; cursor: pointer;
+      transition: width 220ms ease, background 220ms ease;
+    }
+    .dots button[aria-current="true"] { width: 23px; background: var(--accent); }
+    .dots button:focus-visible { outline: 3px solid #93b4ff; outline-offset: 4px; }
+    .progress { height: 3px; background: #edf1f7; }
+    .progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #3b82f6, #7c3aed); }
+    .progress span.is-playing { animation: progress 6.5s linear forwards; }
+    .note { max-width: 760px; margin: 14px auto 0; color: #8591a4; font-size: 11px; line-height: 1.55; text-align: center; }
+    @keyframes progress { to { width: 100%; } }
+    @media (max-width: 620px) {
+      .showcase { padding: 22px 13px; }
+      .heading { margin-bottom: 16px; }
+      .intro { font-size: 13px; }
+      .carousel { border-radius: 15px; }
+      .stage { aspect-ratio: 4 / 3; }
+      .slide { padding: 8px; }
+      .caption-row { align-items: flex-start; padding: 14px 14px 11px; }
+      .caption p { font-size: 12px; }
+      .controls { padding: 0 11px 13px; }
+      .controls button { width: 35px; height: 35px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+      .progress span.is-playing { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="showcase">
+    <header class="heading">
+      <div class="eyebrow">BDAT · Bone Densitometry Analysis Tool</div>
+      <h1>Un vistazo a la aplicación</h1>
+      <p class="intro">Configura modelos óseos, sigue las simulaciones y organiza su ejecución desde una sola interfaz.</p>
+    </header>
+    <section class="carousel" aria-label="Recorrido por las pantallas de BDAT">
+      <div class="stage" id="stage" aria-live="polite">
+        <figure class="slide is-active" data-title="Inicio" data-description="Una vista 3D introduce la plataforma de análisis óseo." aria-hidden="false">
+          <img src="../screenshots/home.png" alt="Portada de BDAT con el modelo óseo 3D y el acceso a la plataforma">
+        </figure>
+        <figure class="slide" data-title="Panel de simulaciones" data-description="Consulta parámetros, estados y avance de varios trabajos." aria-hidden="true">
+          <img src="../screenshots/simulations.png" alt="Tabla de simulaciones de demostración con parámetros y distintos estados">
+        </figure>
+        <figure class="slide" data-title="Parámetros del modelo" data-description="Define transductores, dimensiones, márgenes y porosidad." aria-hidden="true">
+          <img src="../screenshots/simulation-setup.png" alt="Formulario para configurar los parámetros óseos de una simulación de demostración">
+        </figure>
+        <figure class="slide" data-title="Malla y tecnología" data-description="Selecciona el tamaño y el generador de malla." aria-hidden="true">
+          <img src="../screenshots/simulation-mesh-setup.png" alt="Opciones de mallado y tecnología del solucionador">
+        </figure>
+        <figure class="slide" data-title="Administrador de cola" data-description="Revisa el orden y administra los trabajos pendientes." aria-hidden="true">
+          <img src="../screenshots/queue-manager.png" alt="Administrador de cola con una simulación de demostración pendiente">
+        </figure>
+      </div>
+      <div class="caption-row">
+        <div class="caption"><h2 id="slide-title">Inicio</h2><p id="slide-description">Una vista 3D introduce la plataforma de análisis óseo.</p></div>
+        <span class="counter" id="counter" aria-label="Diapositiva 1 de 5">01 / 05</span>
+      </div>
+      <nav class="controls" aria-label="Controles del carrusel">
+        <button type="button" id="previous" aria-label="Pantalla anterior" title="Anterior">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div class="dots" id="dots" aria-label="Elegir una pantalla"></div>
+        <button type="button" id="next" aria-label="Pantalla siguiente" title="Siguiente">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </nav>
+      <div class="progress" aria-hidden="true"><span id="progress"></span></div>
+    </section>
+    <p class="note">La portada muestra la interfaz de BDAT. La tabla y la cola contienen datos de demostración; no representan mediciones científicas reales.</p>
+  </main>
+  <script>
+    (() => {
+      const slides = [...document.querySelectorAll('.slide')];
+      const dots = document.getElementById('dots');
+      const title = document.getElementById('slide-title');
+      const description = document.getElementById('slide-description');
+      const counter = document.getElementById('counter');
+      const progress = document.getElementById('progress');
+      const carousel = document.querySelector('.carousel');
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      let current = 0;
+      let timer;
+
+      const resetProgress = () => {
+        progress.classList.remove('is-playing');
+        void progress.offsetWidth;
+        if (!reducedMotion.matches && !document.hidden) progress.classList.add('is-playing');
+      };
+      const show = (index) => {
+        current = (index + slides.length) % slides.length;
+        slides.forEach((slide, i) => {
+          const active = i === current;
+          slide.classList.toggle('is-active', active);
+          slide.setAttribute('aria-hidden', String(!active));
+          dots.children[i].setAttribute('aria-current', String(active));
+        });
+        title.textContent = slides[current].dataset.title;
+        description.textContent = slides[current].dataset.description;
+        counter.textContent = `${String(current + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}`;
+        counter.setAttribute('aria-label', `Diapositiva ${current + 1} de ${slides.length}`);
+        resetProgress();
+      };
+      const stop = () => { window.clearInterval(timer); timer = undefined; progress.classList.remove('is-playing'); };
+      const start = () => {
+        stop();
+        if (reducedMotion.matches || document.hidden) return;
+        timer = window.setInterval(() => show(current + 1), 6500);
+        resetProgress();
+      };
+
+      slides.forEach((slide, i) => {
+        const dot = document.createElement('button');
+        dot.type = 'button';
+        dot.setAttribute('aria-label', `Mostrar pantalla ${i + 1}: ${slide.dataset.title}`);
+        dot.setAttribute('aria-current', String(i === 0));
+        dot.addEventListener('click', () => { show(i); start(); });
+        dots.append(dot);
+      });
+      document.getElementById('previous').addEventListener('click', () => { show(current - 1); start(); });
+      document.getElementById('next').addEventListener('click', () => { show(current + 1); start(); });
+      carousel.addEventListener('mouseenter', stop);
+      carousel.addEventListener('mouseleave', start);
+      carousel.addEventListener('focusin', stop);
+      carousel.addEventListener('focusout', (event) => { if (!carousel.contains(event.relatedTarget)) start(); });
+      document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
+      reducedMotion.addEventListener?.('change', start);
+      carousel.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowLeft') { show(current - 1); start(); }
+        if (event.key === 'ArrowRight') { show(current + 1); start(); }
+      });
+      show(0);
+      start();
+    })();
+  </script>
+</body>
+</html>

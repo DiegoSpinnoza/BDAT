@@ -12,6 +12,28 @@ BDAT es una aplicación para configurar, ejecutar y analizar simulaciones numér
 
 BDAT está pensado para investigación y análisis computacional. Los resultados dependen de los parámetros y modelos que se introduzcan; la aplicación no sustituye la validación científica de los datos.
 
+## Capturas de la aplicación
+
+Estas pantallas muestran el flujo habitual: revisar simulaciones, definir un modelo y administrar los trabajos en cola. Las imágenes de la lista y la cola usan registros de demostración; no son mediciones ni resultados de un experimento real.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/home.png" alt="Portada de BDAT con el modelo óseo 3D" width="100%"><br><strong>Inicio</strong></td>
+    <td width="50%"><img src="docs/screenshots/simulations.png" alt="Panel de simulaciones con estados y parámetros" width="100%"><br><strong>Panel de simulaciones</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/simulation-setup.png" alt="Formulario para configurar los parámetros óseos" width="100%"><br><strong>Configuración del modelo</strong></td>
+    <td width="50%"><img src="docs/screenshots/simulation-mesh-setup.png" alt="Opciones de malla y tecnología de simulación" width="100%"><br><strong>Malla y tecnología</strong></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/queue-manager.png" alt="Administrador de la cola de simulaciones" width="100%"><br><strong>Administración de la cola</strong></td>
+  </tr>
+</table>
+
+### Carrusel para el portfolio
+
+Preparé una página web independiente que recorre estas pantallas como un carrusel animado, con navegación manual y automática: [instrucciones para usarlo en el portfolio](docs/portfolio/README.md). Puedes alojar la página junto con las capturas y embeberla en tu portfolio mediante un `iframe`. El visor de README de GitHub no ejecuta JavaScript, por eso aquí se muestran las capturas como galería estática.
+
 ## Cómo instalar y usar la aplicación de escritorio
 
 La aplicación de escritorio se distribuye para **Windows x64**. Descarga el instalador más reciente desde [Releases de BDAT](https://github.com/DiegoSpinnoza/BDAT/releases/latest). Para usarla necesitas:
