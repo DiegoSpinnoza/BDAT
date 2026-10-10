@@ -43,7 +43,7 @@ La aplicación de escritorio se distribuye para **Windows x64**. Descarga el ins
 
 No necesitas instalar Git, Node.js ni Python para usar el instalador.
 
-1. Ejecuta `BDAT-Setup-1.0.0.exe` y completa el asistente de instalación.
+1. Ejecuta `BDAT-Setup-1.0.1.exe` y completa el asistente de instalación.
 2. Abre **BDAT** desde el acceso directo del escritorio o desde el menú Inicio.
 3. En el primer inicio, BDAT comprueba e inicia Docker Desktop y prepara los servicios de la aplicación. La descarga y construcción inicial de las imágenes puede tardar varios minutos y requiere conexión a Internet.
 4. Cuando la aplicación termine de iniciar, abre **Simulations** para configurar o importar trabajos.
@@ -144,7 +144,7 @@ npm run desktop:install-deps
 npm run desktop:build
 ```
 
-El proceso compila la interfaz y empaqueta la aplicación con Electron. El instalador resultante es `release/BDAT-Setup-1.0.0.exe`. La primera ejecución del instalador generado también necesita Docker Desktop para construir y ejecutar los servicios científicos.
+El proceso compila la interfaz y empaqueta la aplicación con Electron. El instalador resultante es `release/BDAT-Setup-1.0.1.exe`. La primera ejecución del instalador generado también necesita Docker Desktop para construir y ejecutar los servicios científicos.
 
 ## Estructura del repositorio
 

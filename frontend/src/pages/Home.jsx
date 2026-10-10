@@ -1,55 +1,117 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Check } from 'lucide-react';
+import { Activity, ArrowRight, ArrowUpRight, Orbit } from 'lucide-react';
 import HumanModel from '../components/HumanModel';
+import './Home.css';
+
+const REPOSITORY_URL = 'https://github.com/DiegoSpinnoza/BDAT';
 
 const Home = () => {
   const navigate = useNavigate();
   const runSimulation = () => navigate('/simulations', { state: { showTransition: true } });
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900 overflow-x-hidden flex items-center">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[56rem] h-[56rem] bg-indigo-200/40 blur-[140px]" />
-        <div className="absolute top-72 right-0 w-[28rem] h-[28rem] bg-cyan-200/40 blur-[120px]" />
+    <div className="bdat-landing">
+      <div className="landing-atmosphere" aria-hidden="true">
+        <div className="atmosphere-glow atmosphere-glow-one" />
+        <div className="atmosphere-glow atmosphere-glow-two" />
+        <div className="atmosphere-grid" />
+        <div className="atmosphere-grain" />
+        <span className="background-hex background-hex-one" />
+        <span className="background-hex background-hex-two" />
+        <span className="background-hex background-hex-three" />
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-6 lg:px-10 w-full">
-        <section className="grid lg:grid-cols-2 gap-10 items-center pt-12 pb-12">
-          <div className="space-y-5">
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold leading-tight max-w-xl">
-              Bone Densitometry Analysis Platform
-            </h1>
-            <p className="text-slate-600 max-w-lg leading-relaxed">
-              Simulate and analyze ultrasonic wave propagation in cortical bone using advanced 2D computational mechanics. Configure multi-layered biological models, fine-tune material porosities, and visualize high-fidelity results.
-            </p>
-            <button
-              onClick={runSimulation}
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 px-6 py-3 font-medium transition"
-            >
-              Launch platform
-              <ArrowRight className="w-4 h-4" />
-            </button>
-            <div className="pt-2 flex flex-wrap gap-5 text-slate-600 text-sm">
-              <span className="inline-flex items-center gap-2">
-                <Check className="w-4 h-4 text-emerald-600" />
-                Clear layout
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <Check className="w-4 h-4 text-emerald-600" />
-                3D-first navigation
-              </span>
-            </div>
+      <header className="landing-header">
+        <a className="landing-brand" href="#inicio" aria-label="BDAT home">
+          <span>bdat</span>
+        </a>
+
+        <nav className="landing-nav" aria-label="Main navigation">
+          <a className="nav-link nav-link-active" href="#inicio">Home</a>
+          <button className="nav-link" type="button" onClick={runSimulation}>Simulations</button>
+          <a className="nav-link nav-github" href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+            GitHub <ArrowUpRight aria-hidden="true" />
+          </a>
+        </nav>
+
+        <button className="header-launch" type="button" onClick={runSimulation}>
+          <span>Launch platform</span>
+          <ArrowRight aria-hidden="true" />
+        </button>
+      </header>
+
+      <main id="inicio" className="landing-hero">
+        <section className="hero-copy" aria-labelledby="landing-title">
+          <div className="hero-eyebrow">
+            <span className="eyebrow-orbit"><Orbit aria-hidden="true" /></span>
+            <span>Computational biomechanics</span>
           </div>
 
-          <div className="relative">
-            <div className="absolute -inset-1 rounded-[2rem] bg-gradient-to-r from-indigo-200/60 to-cyan-200/60 blur-xl opacity-80" />
-            <div className="relative h-[460px] rounded-[2rem] border border-slate-200 bg-transparent overflow-hidden">
-              <HumanModel />
+          <h1 id="landing-title">
+            Understand
+            <span className="title-accent">the waves</span>
+            in bone.
+          </h1>
+
+          <p className="hero-description">
+            Simulate ultrasonic wave propagation in cortical bone. Configure the model, run computational analyses and explore the results.
+          </p>
+
+          <div className="hero-actions">
+            <button className="primary-launch" type="button" onClick={runSimulation}>
+              Launch platform
+              <ArrowRight aria-hidden="true" />
+            </button>
+            <a className="secondary-link" href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+              Explore BDAT <ArrowUpRight aria-hidden="true" />
+            </a>
+          </div>
+
+          <div className="hero-facts">
+            <div className="hero-fact">
+              <span className="fact-mark"><Activity aria-hidden="true" /></span>
+              <span><strong>Ultrasonic waves</strong><small>cortical bone</small></span>
+            </div>
+            <span className="fact-divider" aria-hidden="true" />
+            <div className="hero-fact">
+              <span className="fact-mark fact-mark-purple"><Orbit aria-hidden="true" /></span>
+              <span><strong>Computational</strong><small>simulation results</small></span>
             </div>
           </div>
         </section>
-      </div>
+
+        <section className="hero-visual" aria-label="Scientific visualization of ultrasonic wave propagation">
+          <div className="model-halo" aria-hidden="true" />
+          <div className="model-orbit model-orbit-outer" aria-hidden="true" />
+          <div className="model-orbit model-orbit-inner" aria-hidden="true" />
+          <div className="model-vertical-axis" aria-hidden="true" />
+          <div className="model-floor-glow" aria-hidden="true" />
+          <div className="model-floor-ring model-floor-ring-back" aria-hidden="true" />
+          <div className="model-floor-ring model-floor-ring-front" aria-hidden="true" />
+
+          <div className="model-readout model-readout-top" aria-hidden="true">
+            <span className="readout-pulse" />
+            <span>WAVE ANALYSIS</span>
+            <span className="readout-divider" />
+            <span>SIMULATION</span>
+          </div>
+          <div className="model-readout model-readout-bottom" aria-hidden="true">
+            <span className="readout-coordinate">01</span>
+            <span>ULTRASONIC WAVE PROPAGATION</span>
+          </div>
+
+          <div className="model-canvas" aria-hidden="true">
+            <HumanModel />
+          </div>
+        </section>
+      </main>
+
+      <footer className="landing-footer">
+        <span>COMPUTATIONAL BIOMECHANICS</span>
+        <span className="footer-center"><i /> Open scientific platform</span>
+        <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">BDAT PROJECT <ArrowUpRight aria-hidden="true" /></a>
+      </footer>
     </div>
   );
 };

@@ -1,6 +1,6 @@
 {
   "name": "bdat-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Aplicación de escritorio para BDAT",
   "private": true,
   "main": "main.js",

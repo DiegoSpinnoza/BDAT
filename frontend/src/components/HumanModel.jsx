@@ -23,24 +23,32 @@ const HumanModel = () => {
     renderer.setSize(W, H);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.enableZoom = false; // Keep it clean for landing page
+    // Keep the camera still and rotate the bone itself on both axes.
     controls.autoRotate = false;
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    const directionalLight = new THREE.DirectionalLight(0xf3f8ff, 2.2);
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
-    const pointLight = new THREE.PointLight(0x6366f1, 2);
+    const pointLight = new THREE.PointLight(0x9cefff, 3.5);
     pointLight.position.set(-2, 1, 2);
     scene.add(pointLight);
+
+    const rimLight = new THREE.DirectionalLight(0x69cde8, 1.6);
+    rimLight.position.set(-4, 1, -4);
+    scene.add(rimLight);
 
     // Load Model
     const loader = new GLTFLoader();
@@ -56,16 +64,25 @@ const HumanModel = () => {
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
         
-        model.position.x += (model.position.x - center.x);
-        model.position.y += (model.position.y - center.y);
-        model.position.z += (model.position.z - center.z);
+        model.position.sub(center);
 
         // Adjust scale to fit
         const maxDim = Math.max(size.x, size.y, size.z);
         const fov = camera.fov * (Math.PI / 180);
         let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-        cameraZ *= 1.5; // Add some padding
+        cameraZ *= 1.9; // Leave room for the full model in the landing hero.
+        camera.position.y = size.y * 0.04;
         camera.position.z = cameraZ;
+
+        model.traverse((part) => {
+          if (!part.isMesh) return;
+          part.castShadow = true;
+          part.receiveShadow = true;
+          if (part.material) {
+            part.material.side = THREE.FrontSide;
+            part.material.needsUpdate = true;
+          }
+        });
 
         scene.add(model);
       },
@@ -77,11 +94,13 @@ const HumanModel = () => {
 
     // Animation
     let animId;
+    const clock = new THREE.Clock();
     const animate = () => {
       animId = requestAnimationFrame(animate);
+      const delta = Math.min(clock.getDelta(), 0.05);
       if (model) {
-        model.rotation.x += 0.003;
-        model.rotation.y += 0.006;
+        model.rotation.y += delta * 0.62;
+        model.rotation.x = Math.sin(clock.elapsedTime * 0.42) * 0.18;
       }
       controls.update();
       renderer.render(scene, camera);
